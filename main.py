@@ -30,7 +30,7 @@ class SteamApiClient:
         self.base_url = "https://api.steampowered.com"
         self.store_url = "https://store.steampowered.com/api"
         self.last_request_time = 0
-        self.request_delay = 1.5  # Rate limit 고려
+        self.request_delay = 3.0  # Rate limit을 3초로 증가
     
     def _rate_limit(self):
         """Rate limit 관리"""
@@ -41,13 +41,19 @@ class SteamApiClient:
         self.last_request_time = time.time()
     
     def get_all_games(self) -> List[Dict]:
-        """전체 게임 목록 조회"""
+        """전체 게임 목록 조회 (최적화된 버전)"""
         try:
             self._rate_limit()
-            response = requests.get(f"{self.base_url}/ISteamApps/GetAppList/v2/")
+            response = requests.get(f"{self.base_url}/ISteamApps/GetAppList/v2/", timeout=30)
             response.raise_for_status()
             data = response.json()
-            return data.get("applist", {}).get("apps", [])
+            games = data.get("applist", {}).get("apps", [])
+            
+            # 게임만 필터링 (DLC, 소프트웨어 등 제외)
+            game_only = [game for game in games if game.get("name") and len(game.get("name", "")) > 2]
+            
+            # 샘플링 (처음 10000개만 사용)
+            return game_only[:10000]
         except Exception as e:
             print(f"게임 목록 조회 오류: {e}")
             return []
@@ -56,7 +62,7 @@ class SteamApiClient:
         """게임 상세 정보 조회"""
         try:
             self._rate_limit()
-            response = requests.get(f"{self.store_url}/appdetails", params={"appids": appid})
+            response = requests.get(f"{self.store_url}/appdetails", params={"appids": appid}, timeout=15)
             response.raise_for_status()
             data = response.json()
             
@@ -71,7 +77,7 @@ class SteamApiClient:
         """추천/할인 게임 조회"""
         try:
             self._rate_limit()
-            response = requests.get(f"{self.store_url}/featuredcategories")
+            response = requests.get(f"{self.store_url}/featuredcategories", timeout=15)
             response.raise_for_status()
             return response.json()
         except Exception as e:
@@ -304,8 +310,8 @@ def top_games_by_budget(max_price: float, genre: Optional[str] = None, sort_by: 
         
         budget_games = []
         
-        # 샘플링 (전체 게임이 너무 많으므로 처음 1000개만 확인)
-        sample_games = all_games[:1000]
+        # 샘플링 (전체 게임이 너무 많으므로 처음 100개만 확인)
+        sample_games = all_games[:100]
         
         for game in sample_games:
             appid = game["appid"]
@@ -427,8 +433,8 @@ def recommend_by_taste(liked_games: List[str], preferences: Optional[List[str]] 
         # 해당 장르의 게임들 찾기
         recommended_games = []
         
-        # 샘플링 (처음 500개만 확인)
-        sample_games = all_games[:500]
+        # 샘플링 (처음 100개만 확인 - Rate limit 고려)
+        sample_games = all_games[:100]
         
         for game in sample_games:
             appid = game["appid"]
@@ -500,8 +506,8 @@ def get_recent_releases(days: int = 30, genre: Optional[str] = None, min_rating:
         
         recent_games = []
         
-        # 샘플링 (처음 1000개만 확인)
-        sample_games = all_games[:1000]
+        # 샘플링 (처음 100개만 확인 - Rate limit 고려)
+        sample_games = all_games[:100]
         
         for game in sample_games:
             appid = game["appid"]
@@ -579,8 +585,8 @@ def recommend_action_rpg_games(limit: int = 10) -> Dict[str, Any]:
         
         action_rpg_games = []
         
-        # 샘플링 (처음 1000개만 확인)
-        sample_games = all_games[:1000]
+        # 샘플링 (처음 100개만 확인 - Rate limit 고려)
+        sample_games = all_games[:100]
         
         for game in sample_games:
             appid = game["appid"]

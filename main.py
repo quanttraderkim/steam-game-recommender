@@ -81,6 +81,28 @@ class SteamApiClient:
 # Steam API 클라이언트 인스턴스
 steam_client = SteamApiClient()
 
+# 간단한 캐시 (메모리 기반)
+class SimpleCache:
+    def __init__(self):
+        self.cache = {}
+        self.cache_time = {}
+        self.ttl = 300  # 5분 TTL
+    
+    def get(self, key):
+        if key in self.cache:
+            if time.time() - self.cache_time[key] < self.ttl:
+                return self.cache[key]
+            else:
+                del self.cache[key]
+                del self.cache_time[key]
+        return None
+    
+    def set(self, key, value):
+        self.cache[key] = value
+        self.cache_time[key] = time.time()
+
+cache = SimpleCache()
+
 @mcp.tool
 def search_games(query: str) -> Dict[str, Any]:
     """Steam 게임 검색
@@ -92,7 +114,11 @@ def search_games(query: str) -> Dict[str, Any]:
         dict: 검색된 게임 목록과 기본 정보
     """
     try:
-        all_games = steam_client.get_all_games()
+        # 캐시에서 게임 목록 확인
+        all_games = cache.get("all_games")
+        if not all_games:
+            all_games = steam_client.get_all_games()
+            cache.set("all_games", all_games)
         
         # 게임 이름으로 필터링 (대소문자 무시)
         matching_games = [
@@ -270,7 +296,12 @@ def top_games_by_budget(max_price: float, genre: Optional[str] = None, sort_by: 
         dict: 가격대 내 최고 게임 목록
     """
     try:
-        all_games = steam_client.get_all_games()
+        # 캐시에서 게임 목록 확인
+        all_games = cache.get("all_games")
+        if not all_games:
+            all_games = steam_client.get_all_games()
+            cache.set("all_games", all_games)
+        
         budget_games = []
         
         # 샘플링 (전체 게임이 너무 많으므로 처음 1000개만 확인)
@@ -345,12 +376,24 @@ def recommend_by_taste(liked_games: List[str], preferences: Optional[List[str]] 
         dict: 취향에 맞는 게임 추천 목록
     """
     try:
+        # 캐시에서 게임 목록 확인
+        all_games = cache.get("all_games")
+        if not all_games:
+            all_games = steam_client.get_all_games()
+            cache.set("all_games", all_games)
+        
         # 좋아하는 게임들의 정보 수집
         liked_game_details = []
+        
         for game_name in liked_games:
-            search_results = search_games(game_name)
-            if search_results.get("results"):
-                appid = search_results["results"][0]["appid"]
+            # 직접 검색 로직 구현
+            matching_games = [
+                game for game in all_games 
+                if game_name.lower() in game.get("name", "").lower()
+            ]
+            
+            if matching_games:
+                appid = matching_games[0]["appid"]
                 details = steam_client.get_game_details(appid)
                 if details:
                     liked_game_details.append(details)
@@ -382,7 +425,6 @@ def recommend_by_taste(liked_games: List[str], preferences: Optional[List[str]] 
         top_genre_names = [genre for genre, count in top_genres]
         
         # 해당 장르의 게임들 찾기
-        all_games = steam_client.get_all_games()
         recommended_games = []
         
         # 샘플링 (처음 500개만 확인)
@@ -450,7 +492,12 @@ def get_recent_releases(days: int = 30, genre: Optional[str] = None, min_rating:
     try:
         cutoff_date = datetime.now() - timedelta(days=days)
         
-        all_games = steam_client.get_all_games()
+        # 캐시에서 게임 목록 확인
+        all_games = cache.get("all_games")
+        if not all_games:
+            all_games = steam_client.get_all_games()
+            cache.set("all_games", all_games)
+        
         recent_games = []
         
         # 샘플링 (처음 1000개만 확인)
@@ -510,6 +557,74 @@ def get_recent_releases(days: int = 30, genre: Optional[str] = None, min_rating:
     except Exception as e:
         return {
             "error": f"신작 게임 추천 중 오류 발생: {str(e)}",
+            "results": []
+        }
+
+@mcp.tool
+def recommend_action_rpg_games(limit: int = 10) -> Dict[str, Any]:
+    """액션 RPG 게임 추천
+    
+    Args:
+        limit: 최대 결과 수 (기본: 10)
+    
+    Returns:
+        dict: 액션 RPG 게임 추천 목록
+    """
+    try:
+        # 캐시에서 게임 목록 확인
+        all_games = cache.get("all_games")
+        if not all_games:
+            all_games = steam_client.get_all_games()
+            cache.set("all_games", all_games)
+        
+        action_rpg_games = []
+        
+        # 샘플링 (처음 1000개만 확인)
+        sample_games = all_games[:1000]
+        
+        for game in sample_games:
+            appid = game["appid"]
+            details = steam_client.get_game_details(appid)
+            
+            if not details:
+                continue
+            
+            game_genres = [g["description"].lower() for g in details.get("genres", [])]
+            
+            # 액션 RPG 장르 확인
+            is_action_rpg = (
+                "action" in game_genres and 
+                ("rpg" in game_genres or "role-playing" in game_genres)
+            ) or (
+                "action rpg" in " ".join(game_genres) or
+                "action role-playing" in " ".join(game_genres)
+            )
+            
+            if is_action_rpg:
+                recommendations = details.get("recommendations", {}).get("total", 0)
+                price_info = details.get("price_overview", {})
+                final_price = price_info.get("final", 0) / 100 if price_info else 0
+                
+                action_rpg_games.append({
+                    "appid": appid,
+                    "name": details.get("name", "Unknown"),
+                    "genres": [g["description"] for g in details.get("genres", [])],
+                    "recommendations": recommendations,
+                    "price": final_price,
+                    "release_date": details.get("release_date", {}).get("date", "")
+                })
+        
+        # 평점 높은 순으로 정렬
+        action_rpg_games.sort(key=lambda x: x["recommendations"], reverse=True)
+        
+        return {
+            "genre": "Action RPG",
+            "total_found": len(action_rpg_games),
+            "results": action_rpg_games[:limit]
+        }
+    except Exception as e:
+        return {
+            "error": f"액션 RPG 게임 추천 중 오류 발생: {str(e)}",
             "results": []
         }
 
